@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const db = require('./db'); // Koneksi database berbasis callback bawaanmu
@@ -188,8 +189,8 @@ app.get('/api/transaksi', (req, res) => {
             alamat_site_bebas,
             pic_lapangan,
             no_whatsapp_pic,
-            DATE_FORMAT(tanggal_mulai, '%Y-%m-%d') AS tanggal_mulai,
-            DATE_FORMAT(tanggal_selesai, '%Y-%m-%d') AS tanggal_selesai,
+            TO_CHAR(tanggal_mulai, 'YYYY-MM-DD') AS tanggal_mulai,
+            TO_CHAR(tanggal_selesai, 'YYYY-MM-DD') AS tanggal_selesai,
             total_hari_sewa,
             total_harga_kontrak,
             uang_muka_dp,
@@ -354,8 +355,8 @@ app.get('/api/surat-jalan', (req, res) => {
             hm_awal,
             hm_akhir,
             status_mobilisasi,
-            DATE_FORMAT(tanggal_keluar, '%Y-%m-%d') AS tanggal_keluar,
-            DATE_FORMAT(tanggal_masuk, '%Y-%m-%d') AS tanggal_masuk
+            TO_CHAR(tanggal_keluar, 'YYYY-MM-DD') AS tanggal_keluar,
+            TO_CHAR(tanggal_masuk, 'YYYY-MM-DD') AS tanggal_masuk
         FROM surat_jalan 
         ORDER BY id_surat_jalan DESC
     `;
@@ -457,7 +458,7 @@ app.post('/api/log-harian', (req, res) => {
 
 
 app.get('/api/grafik-keuangan', (req, res) => { 
-    db.query("SELECT DATE_FORMAT(tanggal_mulai, '%b') AS bulan, SUM(total_harga_kontrak) AS Pemasukan, SUM(total_harga_kontrak) AS LabaBersih FROM transaksi_rental WHERE status_transaksi != 'Batal' GROUP BY DATE_FORMAT(tanggal_mulai, '%b'), MONTH(tanggal_mulai) ORDER BY MONTH(tanggal_mulai) ASC", (err, rows) => { 
+    db.query("SELECT TO_CHAR(tanggal_mulai, 'Mon') AS bulan, SUM(total_harga_kontrak) AS Pemasukan, SUM(total_harga_kontrak) AS LabaBersih FROM transaksi_rental WHERE status_transaksi != 'Batal' GROUP BY TO_CHAR(tanggal_mulai, 'Mon'), EXTRACT(MONTH FROM tanggal_mulai) ORDER BY EXTRACT(MONTH FROM tanggal_mulai) ASC", (err, rows) => { 
         if (err) return res.status(500).json(err); 
         if (rows.length === 0) return res.json([{ name: 'Jan', Pemasukan: 0, Pengeluaran: 0, LabaBersih: 0 }]); 
         return res.json(rows.map(i => ({ name: i.bulan, Pemasukan: parseFloat(i.Pemasukan), Pengeluaran: 0, LabaBersih: parseFloat(i.LabaBersih) }))); 
@@ -676,23 +677,23 @@ app.get('/api/keuangan-detail', (req, res) => {
     const sql = `
         -- PENGELUARAN (DEBIT)
         SELECT 'Workshop' as kategori, no_lambung, deskripsi_kerusakan as keterangan, biaya_sparepart as nominal, tanggal_kerusakan as tanggal, 'Debit' as tipe 
-        FROM workshop_maintenance WHERE MONTH(tanggal_kerusakan) = ? AND YEAR(tanggal_kerusakan) = ?
+        FROM workshop_maintenance WHERE EXTRACT(MONTH FROM tanggal_kerusakan) = CAST(? AS INT) AND EXTRACT(YEAR FROM tanggal_kerusakan) = CAST(? AS INT)
         
         UNION ALL
         
         SELECT 'BBM' as kategori, (SELECT no_lambung FROM transaksi_rental WHERE transaksi_rental.id_kontrak = log_harian_alat.id_kontrak) as no_lambung, catatan_lapangan as keterangan, biaya_bbm_nota as nominal, tanggal_log as tanggal, 'Debit' as tipe 
-        FROM log_harian_alat WHERE MONTH(tanggal_log) = ? AND YEAR(tanggal_log) = ?
+        FROM log_harian_alat WHERE EXTRACT(MONTH FROM tanggal_log) = CAST(? AS INT) AND EXTRACT(YEAR FROM tanggal_log) = CAST(? AS INT)
         
         UNION ALL
         
         SELECT 'Towing' as kategori, (SELECT no_lambung FROM transaksi_rental WHERE transaksi_rental.id_kontrak = surat_jalan.id_kontrak) as no_lambung, 'Mobilisasi Alat Berat' as keterangan, ongkos_angkut_towing as nominal, tanggal_keluar as tanggal, 'Debit' as tipe 
-        FROM surat_jalan WHERE MONTH(tanggal_keluar) = ? AND YEAR(tanggal_keluar) = ?
+        FROM surat_jalan WHERE EXTRACT(MONTH FROM tanggal_keluar) = CAST(? AS INT) AND EXTRACT(YEAR FROM tanggal_keluar) = CAST(? AS INT)
         
         UNION ALL
         
         -- PEMASUKAN (KREDIT)
         SELECT 'Pendapatan Sewa' as kategori, no_lambung, 'Pembayaran Kontrak' as keterangan, total_harga_kontrak as nominal, tanggal_mulai as tanggal, 'Kredit' as tipe 
-        FROM transaksi_rental WHERE status_transaksi = 'Selesai' AND MONTH(tanggal_selesai) = ? AND YEAR(tanggal_selesai) = ?
+        FROM transaksi_rental WHERE status_transaksi = 'Selesai' AND EXTRACT(MONTH FROM tanggal_selesai) = CAST(? AS INT) AND EXTRACT(YEAR FROM tanggal_selesai) = CAST(? AS INT)
     `;
 
     db.query(sql, [bulan, tahun, bulan, tahun, bulan, tahun, bulan, tahun], (err, result) => {
@@ -705,12 +706,11 @@ app.get('/api/keuangan-detail', (req, res) => {
 app.get('/api/neraca-keuangan', (req, res) => {
     const sql = `
         SELECT 
-            (SELECT IFNULL(SUM(total_harga_kontrak), 0) FROM transaksi_rental WHERE LOWER(TRIM(status_transaksi)) = 'selesai') as tunai,
-            (SELECT IFNULL(SUM(total_harga_kontrak), 0) FROM transaksi_rental WHERE LOWER(TRIM(status_transaksi)) NOT IN ('selesai', 'batal')) as potensial,
-            (SELECT IFNULL(SUM(biaya_sparepart), 0) FROM workshop_maintenance) as workshop,
-            (SELECT IFNULL(SUM(biaya_bbm_nota), 0) FROM log_harian_alat) as bbm,
-            (SELECT IFNULL(SUM(ongkos_angkut_towing), 0) FROM surat_jalan) as towing
-        FROM dual
+            (SELECT COALESCE(SUM(total_harga_kontrak), 0) FROM transaksi_rental WHERE LOWER(TRIM(status_transaksi)) = 'selesai') as tunai,
+            (SELECT COALESCE(SUM(total_harga_kontrak), 0) FROM transaksi_rental WHERE LOWER(TRIM(status_transaksi)) NOT IN ('selesai', 'batal')) as potensial,
+            (SELECT COALESCE(SUM(biaya_sparepart), 0) FROM workshop_maintenance) as workshop,
+            (SELECT COALESCE(SUM(biaya_bbm_nota), 0) FROM log_harian_alat) as bbm,
+            (SELECT COALESCE(SUM(ongkos_angkut_towing), 0) FROM surat_jalan) as towing
     `;
 
     db.query(sql, (err, rows) => {
@@ -743,13 +743,13 @@ app.get('/api/neraca-keuangan', (req, res) => {
 app.get('/api/grafik-keuangan', (req, res) => {
     const sql = `
         SELECT 
-            DATE_FORMAT(tanggal_transaksi, '%b') as name,
+            TO_CHAR(tanggal_mulai, 'Mon') as name,
             SUM(total_harga_kontrak) as Pemasukan,
-            (SELECT SUM(biaya_sparepart) FROM workshop_maintenance WHERE MONTH(tanggal) = MONTH(tanggal_transaksi)) as Pengeluaran,
-            (SUM(total_harga_kontrak) - (SELECT SUM(biaya_sparepart) FROM workshop_maintenance WHERE MONTH(tanggal) = MONTH(tanggal_transaksi))) as LabaBersih
+            COALESCE((SELECT SUM(biaya_sparepart) FROM workshop_maintenance WHERE EXTRACT(MONTH FROM tanggal_kerusakan) = EXTRACT(MONTH FROM tanggal_mulai)), 0) as Pengeluaran,
+            (SUM(total_harga_kontrak) - COALESCE((SELECT SUM(biaya_sparepart) FROM workshop_maintenance WHERE EXTRACT(MONTH FROM tanggal_kerusakan) = EXTRACT(MONTH FROM tanggal_mulai)), 0)) as LabaBersih
         FROM transaksi_rental
-        GROUP BY MONTH(tanggal_transaksi)
-        ORDER BY tanggal_transaksi ASC
+        GROUP BY TO_CHAR(tanggal_mulai, 'Mon'), EXTRACT(MONTH FROM tanggal_mulai)
+        ORDER BY EXTRACT(MONTH FROM tanggal_mulai) ASC
     `;
     db.query(sql, (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -759,7 +759,7 @@ app.get('/api/grafik-keuangan', (req, res) => {
 
 app.get('/api/jadwal-sewa', (req, res) => {
     // Query yang mengambil data kontrak yang akan datang
-    const sql = "SELECT tgl_mulai as tgl, DATE_FORMAT(tgl_mulai, '%b') as bln, nama_proyek as proyek, jumlah_unit as unit FROM transaksi_rental WHERE tgl_mulai >= CURDATE() LIMIT 4";
+    const sql = "SELECT tanggal_mulai as tgl, TO_CHAR(tanggal_mulai, 'Mon') as bln, penyewa as proyek, 1 as unit FROM transaksi_rental WHERE tanggal_mulai >= CURRENT_DATE LIMIT 4";
     db.query(sql, (err, rows) => res.json(rows));
 });
 
@@ -792,16 +792,6 @@ app.get('/api/maintenance-logs', (req, res) => {
     });
 });
 
-app.get('/api/aktifitas-proyek', (req, res) => {
-    // Pastikan tabel 'proyek' atau 'transaksi_rental' ada di database Anda
-    const sql = "SELECT nama_proyek as site, jumlah_unit as units, status_proyek as status FROM proyek LIMIT 3";
-    db.query(sql, (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(rows || []);
-    });
-});
-
-// 🎯 HAPUS KURUNG KURAWAL '}' YANG MUNCUL SEBELUM APP.LISTEN INI
 app.listen(5000, () => { 
     console.log('Backend Server Active on Port 5000'); 
 });
